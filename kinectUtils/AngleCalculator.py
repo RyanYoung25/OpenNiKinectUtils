@@ -24,7 +24,7 @@ def generateVector(Apos, Bpos):
     #B minus A
     xComp = Bpos[0] - Apos[0]
     yComp = Bpos[1] - Apos[1]
-    zComp = Bpos[2] - Apos[2]
+    zComp = Bpos[2] - Apos[2]/
     return np.array([xComp, yComp, zComp])
 
 
@@ -45,28 +45,18 @@ Math for calculating the Shoulder Yaw from
 Matthew Wiese Star Project ITERO inspired
 '''
 def calculateYaw(EW, ES, joint):
-        #finding z line cross shoulder elbow vector:
-        avec1 = np.array([joint[0], joint[1], 2])
-        bvec1 = ES
-        zcross = np.cross(avec1, bvec1)
-        EO = np.cross(EW, ES)
-        EB = joint
-        #finding cross of zcrossR and bvec
-        zCross2 = np.cross(bvec1, zcross)
-        #Normalize the elbow orientation and component add the elbow bend
-        step1EO = EO / np.linalg.norm(EO)
-        EO = step1EO + EB
-        #Normalize the zCross2 vector to get the direction and component
-        # add the elbow bend
-        step1zCross2 = zCross2 / np.linalg.norm(zCross2)
-        zCross2 = step1zCross2 + EB
+        #Create the z component vector of the elbow
+        zElbVec = np.array([2, 2, joint[2]])
+        #Create the red, elbow wrist elbow shoulder cross product vector
+        elbowOrient = np.cross(EW, ES)
+        #Create the Blue vector by crossing the elbowShoulder and zVector
+        blue = np.cross(ES, zElbVec)
+        #Find the green vector by crossing the blue vector and the elbow to shoulder
+        green = np.cross(ES, blue)
+        #Find the angle between the green vector and the orientation
+        yaw = calculateTheta(elbowOrient, green)
 
-        #Make the final vectors to calculate the angle between
-        elbowToOrentation = generateVector(EB, EO)
-        elbowToZ = generateVector(EB, zCross2)
-
-        theta = calculateTheta(elbowToOrentation, elbowToZ) - 1.57
-        return theta
+        return yaw
 
 
 def reduceRadians(angle):
@@ -95,6 +85,114 @@ def getRoll(vector):
     #asin(vect[1])
     alpha = math.asin(vector[1])
     return alpha
+
+
+def normalizeVector(vec):
+    normVec = vec / np.linalg.norm(vec)
+    return normVec
+
+
+def calculateRPY(bodyMatrix, armMatrix):
+
+    #Symbolic computation done in matlab
+    '''
+
+    [ cos(b)*cos(y) + sin(a)*sin(b)*sin(y), cos(a)*sin(y), cos(b)*sin(a)*sin(y) - sin(b)*cos(y)]
+    [ sin(a)*sin(b)*cos(y) - cos(b)*sin(y), cos(a)*cos(y), sin(b)*sin(y) + cos(b)*sin(a)*cos(y)]
+    [                        cos(a)*sin(b),       -sin(a),                        cos(a)*cos(b)]
+
+    '''
+
+    #Create the rotation matrix
+    rot = np.transpose(bodyMatrix)*armMatrix
+    #Find alpha, roll
+    negSinAlpha = rot[2,1]
+    alpha = math.asin(-1 * negSinAlpha)
+    #Find beta, pitch
+    #Cos(a)*cos(b) = rot[2,2]
+    beta = math.acos(rot[2,2]/math.cos(alpha))
+    #Find gamma, yaw
+    #cos(a)*cos(gamma) = rot[1,1]
+    gamma = math.acos(rot[1,1]/math.cos(alpha))
+
+    #Return roll, pitch, yaw
+    return np.array[alpha, beta, gamma]
+
+def newAngleGen(jsonString):
+    dict = json.loads(jsonString)
+    #Get the joint list
+    jointList = dict["Joints"]
+
+    #Create coordianate vectors for each joint point
+    #Indices from above
+    RH = getPointFromJoint(jointList[12])
+    RW = getPointFromJoint(jointList[11])
+    RE = getPointFromJoint(jointList[10])
+    RS = getPointFromJoint(jointList[9])
+    NK = getPointFromJoint(jointList[1])
+    HD = getPointFromJoint(jointList[0])
+    LH = getPointFromJoint(jointList[6])
+    LS = getPointFromJoint(jointList[3])
+    LE = getPointFromJoint(jointList[4])
+    LW = getPointFromJoint(jointList[5])
+    TS = getPointFromJoint(jointList[2])
+
+    #Create vectors for the elbows
+    REBA = generateVector(RE, RW)
+    REBB = generateVector(RE, RS)
+    LEBA = generateVector(LE, LW)
+    LEBB = generateVector(LE, LS)
+
+    #Create Fully body cooridinate system
+    zAxis = generateAngles(TS, NK)
+    zAxis = normalizeVector(zAxis)
+    yAxis = generateAngles(RS, LS)
+    yAxis = normalizeVector(yAxis)
+    xAxis = np.cross(zAxis, yAxis)
+    xAxis = normalizeVector(xAxis)
+    yAxis = np.cross(zAxis, xAxis)
+    yAxis = normalizeVector(yAxis)
+
+    fullBodyMatrix = np.matrix([xAxis, yAxis, zAxis])
+
+    #Create Left Arm coordinate system
+    leftZAxis = normalizeVector(generateVector(LW, LS))
+    leftYAxis = normalizeVector(np.cross(generateVector(LE, LW), generateVector(LE, LS)))
+    leftXAxis = np.cross(leftYAxis, leftZAxis)
+
+    leftMatrix = np.matrix([leftXAxis, leftYAxis, leftZAxis])
+
+    #Create right Arm coordinate system
+    rightZAxis = normalizeVector(generateVector(RW, RS))
+    rightYAxis = normalizeVector(np.cross(generateVector(RE, RW), generateVector(RE, RS)))
+    rightXAxis = np.cross(rightYAxis, rightZAxis)
+
+    rightMatrix = np.matrix([rightXAxis, rightYAxis, rightZAxis])
+
+    #Matrix magic
+    
+    #Get right angles
+    rightAngles = calculateRPY(bodyMatrix, rightMatrix)
+    RSR = rightAngles[0]
+    RSP = rightAngles[1]
+    RSY = rightAngles[2]
+    REP = calculateTheta(REBA, REBB)
+
+    #Get left angles
+    leftAngles = calculateRPY(bodyMatrix, leftMatrix)
+    LSR = leftAngles[0]
+    LSP = leftAngles[1]
+    LSY = leftAngles[2]
+    LEP = calculateTheta(LEBA, LEBB)
+
+    #Return the angles
+    angles = np.array([REB, LEB, RSY, LSY, RSR, LSR, RSP, LSP])
+
+    return angles
+
+
+
+
 
 
 def generateAngles(jsonString):
@@ -183,12 +281,12 @@ def generateAngles(jsonString):
     #Generate the angles
     REB = calculateTheta(REBA, REBB)
     LEB = calculateTheta(LEBA, LEBB)
-    RSY = calculateYaw(RSYA, RSYB, RE)
-    LSY = calculateYaw(LSYA, LSYB, LE)
-    RSR = -1 * calculateTheta(RSRA, RSRB)  #getRoll(vectorA)
-    LSR = calculateTheta(LSRA, LSRB)  #getRoll(vectorB)
-    RSP = calculateTheta(RSPA, RSPB) #getPitch(vectorA)
-    LSP = calculateTheta(LSPA, LSPB) #getPitch(vectorB)
+    RSY = -1 * calculateYaw(RSYA, RSYB, RE)
+    LSY = -1 * calculateYaw(LSYA, LSYB, LE)
+    RSR = -1 * calculateTheta(RSRA, RSRB)  
+    LSR = calculateTheta(LSRA, LSRB)  
+    RSP = calculateTheta(RSPA, RSPB)
+    LSP = calculateTheta(LSPA, LSPB) 
 
     #Reduce the angles! Might not be needed after all. I thought there was a bug
     # but it was somewhere else.
@@ -203,7 +301,7 @@ def generateAngles(jsonString):
 
 
     angles = np.array([REB, LEB, RSY, LSY, RSR, LSR, RSP, LSP])
-    print len(angles)
+    #print len(angles)
     return angles
 
 
